@@ -1,0 +1,426 @@
+openapi: 3.0.3
+info:
+  title: CMS Backend API
+  description: |
+    Content Management System API with JWT authentication, content versioning,
+    scheduled publishing, full-text search, and Redis caching.
+    - **Authors** use Bearer token for CRUD, publish, schedule, revisions, media.
+    - **Public** can read published posts and search without authentication.
+  version: 1.0.0
+  contact:
+    name: API Support
+
+servers:
+  - url: http://localhost:3000
+    description: Local (Docker or dev)
+
+tags:
+  - name: Auth
+    description: Authentication
+  - name: Posts (Author)
+    description: Author-only post management
+  - name: Public
+    description: Public read-only endpoints
+  - name: Search
+    description: Full-text search
+  - name: Media
+    description: Author media upload
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      tags: [Public]
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /auth/login:
+    post:
+      summary: Log in
+      description: Returns a JWT and user info. Use the token in `Authorization: Bearer <token>` for author endpoints.
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: author@example.com
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT for Authorization header
+                  user:
+                    $ref: '#/components/schemas/UserInfo'
+        '400':
+          description: Validation error
+        '401':
+          description: Invalid email or password
+
+  /posts:
+    get:
+      summary: List author's posts
+      description: Paginated list of posts for the authenticated author.
+      tags: [Posts (Author)]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '401':
+          description: Authentication required
+    post:
+      summary: Create post (draft)
+      description: Creates a new post with status `draft`. Slug is generated from title and made unique.
+      tags: [Posts (Author)]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, maxLength: 500 }
+                content: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '400':
+          description: Validation error
+        '401':
+          description: Authentication required
+
+  /posts/published:
+    get:
+      summary: List published posts (public)
+      tags: [Public]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+
+  /posts/published/{id}:
+    get:
+      summary: Get one published post (public)
+      tags: [Public]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '404':
+          description: Post not found or not published
+
+  /posts/{id}:
+    get:
+      summary: Get post by ID (author, own only)
+      tags: [Posts (Author)]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '401': { description: Authentication required }
+        '403': { description: Not your post }
+        '404': { description: Post not found }
+    put:
+      summary: Update post (creates revision)
+      description: Updates title and/or content. Previous state is saved to post_revisions.
+      tags: [Posts (Author)]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string, maxLength: 500 }
+                content: { type: string }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '400': { description: Validation error }
+        '401': { description: Authentication required }
+        '403': { description: Not your post }
+        '404': { description: Post not found }
+    delete:
+      summary: Delete post (author, own only)
+      tags: [Posts (Author)]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '204': { description: Deleted }
+        '401': { description: Authentication required }
+        '403': { description: Not your post }
+        '404': { description: Post not found }
+
+  /posts/{id}/publish:
+    post:
+      summary: Publish draft immediately
+      description: Sets status to `published` and `published_at` to now.
+      tags: [Posts (Author)]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '400': { description: Only draft posts can be published }
+        '401': { description: Authentication required }
+        '403': { description: Not your post }
+        '404': { description: Post not found }
+
+  /posts/{id}/schedule:
+    post:
+      summary: Schedule draft for future publish
+      description: Sets status to `scheduled` and `scheduled_for` to the given datetime. Worker will publish when time is due.
+      tags: [Posts (Author)]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scheduled_for]
+              properties:
+                scheduled_for:
+                  type: string
+                  format: date-time
+                  description: Future ISO 8601 datetime
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Post' }
+        '400': { description: scheduled_for must be in the future or only draft can be scheduled }
+        '401': { description: Authentication required }
+        '403': { description: Not your post }
+        '404': { description: Post not found }
+
+  /posts/{id}/revisions:
+    get:
+      summary: Get version history
+      description: Returns revision snapshots (title, content, author, timestamp).
+      tags: [Posts (Author)]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    revision_id: { type: integer }
+                    post_id: { type: integer }
+                    title_snapshot: { type: string }
+                    content_snapshot: { type: string }
+                    revision_author: { type: string }
+                    revision_timestamp: { type: string, format: date-time }
+        '401': { description: Authentication required }
+        '403': { description: Not your post }
+        '404': { description: Post not found }
+
+  /search:
+    get:
+      summary: Full-text search (public)
+      description: Searches title and content of published posts only.
+      tags: [Search]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  posts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Post' }
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '400':
+          description: Missing or invalid query
+
+  /media/upload:
+    post:
+      summary: Upload image (author)
+      description: Accepts multipart/form-data with field `file`. Returns URL for embedding.
+      tags: [Media]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Image (jpeg, png, gif, webp; max 5MB)
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  filename: { type: string }
+        '400': { description: No file or invalid type/size }
+        '401': { description: Authentication required }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Use the token from POST /auth/login
+  schemas:
+    UserInfo:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        role: { type: string, enum: [author, public] }
+    Post:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        slug: { type: string }
+        content: { type: string }
+        status: { type: string, enum: [draft, scheduled, published] }
+        author_id: { type: integer }
+        scheduled_for: { type: string, format: date-time, nullable: true }
+        published_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
