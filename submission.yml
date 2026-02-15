@@ -1,0 +1,24 @@
+# Submission configuration for CMS Backend API
+# All commands are intended to be run from the repository root.
+
+# Setup: build and start the environment (API, worker, PostgreSQL, Redis).
+# Database schema is applied automatically; default author is seeded on first API request.
+setup:
+  command: docker-compose up -d --build
+  description: Build and start all containers.
+
+# Run the automated test suite. Requires Docker; run after setup or with stack running.
+run_tests:
+  command: docker-compose run --rm -v "${PWD}:/app" -e DATABASE_URL=postgresql://cms_user:cms_password@db:5432/cms_db -e REDIS_URL=redis://redis:6379 -e NODE_ENV=test api sh -c "npm install && npx jest --forceExit --detectOpenHandles --runInBand"
+  description: Run all tests inside Docker network (installs deps first so Jest is available).
+
+# Start the application (API server on port 3000 and background worker).
+# Use after setup or to start previously stopped containers.
+start:
+  command: docker-compose up -d
+  description: Start API, worker, PostgreSQL, and Redis.
+
+# Optional: run in foreground with logs.
+start_foreground:
+  command: docker-compose up
+  description: Start all services in foreground; Ctrl+C to stop.
