@@ -1,0 +1,11 @@
+node_modules
+Content-Publishing-API-
+.git
+.env
+*.log
+coverage
+__tests__
+uploads_test
+*.md
+.gitignore
+jest.config.js
